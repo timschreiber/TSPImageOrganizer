@@ -8,9 +8,9 @@ namespace TPS.ImageOrganizer
 {
     public class PictureMetaInformation
     {
-        public string Caption { get; set; }
         public string FileName { get { return fileName; } }
 
+        public string Caption { get; set; }
         public DateTime? FileDateTime;
         public string ImageDescription;
         public string Make;
@@ -49,7 +49,7 @@ namespace TPS.ImageOrganizer
                 instance = new PictureMetaInformation(filename);
                 return true;
             }
-            catch (Exception ex)
+            catch
             {
                 instance = null;
                 return false;
