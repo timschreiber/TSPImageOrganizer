@@ -1,8 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.Drawing.Imaging;
 using System.Drawing;
 using System.IO;
@@ -14,10 +10,23 @@ namespace TPS.ImageOrganizer
     {
         static void Main(string[] args)
         {
-            var hash = generateHash(args[0]);
-            Console.WriteLine(hash);
+            var operation = args[0];
+            var fileName = args[1];
+            var hash = generateHash(fileName);
 
-//            writeHashToExif(args[0], hash);
+            switch(operation.ToLower())
+            {
+                case "write":
+                    writeHashToExif(fileName, hash);
+                    break;
+                case "read":
+                    Console.WriteLine(readHashFromExif(fileName));
+                    break;
+                case "match":
+                    Console.WriteLine(hashesMatch(fileName));
+                    break;
+            }
+
             Console.WriteLine("OK");
             Console.ReadKey();
         }
@@ -32,21 +41,29 @@ namespace TPS.ImageOrganizer
             }
         }
 
-        public static void writeHashToExif(string fileName, string hash)
+        public static string readHashFromExif(string fileName)
         {
+            PictureMetaInformation instance;
+            if (!PictureMetaInformation.TryGet(fileName, out instance))
+                return string.Empty;
+            return instance.Caption;
         }
 
-        private static void SetProperty(ref System.Drawing.Imaging.PropertyItem prop, int iId, string sTxt)
+        public static void writeHashToExif(string fileName, string hash)
         {
-            int iLen = sTxt.Length + 1;
-            byte[] bTxt = new Byte[iLen];
-            for (int i = 0; i < iLen - 1; i++)
-                bTxt[i] = (byte)sTxt[i];
-            bTxt[iLen - 1] = 0x00;
-            prop.Id = iId;
-            prop.Type = 2;
-            prop.Value = bTxt;
-            prop.Len = iLen;
+            PictureMetaInformation instance;
+            if(PictureMetaInformation.TryGet(fileName, out instance))
+            {
+                instance.Caption = hash;
+                instance.Write();
+            }
+        }
+
+        public static bool hashesMatch(string fileName)
+        {
+            var hash1 = generateHash(fileName);
+            var hash2 = readHashFromExif(fileName);
+            return string.Compare(hash1, hash2) == 0;
         }
     }
 }
