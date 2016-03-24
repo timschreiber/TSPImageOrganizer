@@ -1,59 +1,72 @@
 ﻿using System;
-using System.Drawing.Imaging;
 using System.Drawing;
 using System.IO;
 using System.Security.Cryptography;
 using System.Collections.Generic;
-using System.Drawing.Drawing2D;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
+using System.Linq;
 
 namespace TPS.ImageOrganizer
 {
     class Program
     {
+        static int _threads = Environment.ProcessorCount > 1 ? Convert.ToInt32(Math.Floor(Environment.ProcessorCount * 0.5)) : 1;
+
         static void Main(string[] args)
         {
-            var srcDir = args[0];
-            var dstDir = args[1];
+            var action = args[0];
+            switch(action.ToLower())
+            {
+                case "hash":
+                    doHash(args[1]);
+                    break;
+                case "copy":
+                    doCopy(args[1], args[2]);
+                    break;
+            }
 
-            var srcHashDictionary = new Dictionary<string, string>();
-            var srcErrDictionary = new Dictionary<string, string>();
-            var dstHashDictionary = new Dictionary<string, string>();
-            var dstErrDictionary = new Dictionary<string, string>();
+            //var srcDir = args[0];
+            //var dstDir = args[1];
 
-            var ts = DateTime.Now;
-            Console.Write("Getting Source Image Hashes... ");
-            hashDirectory(srcHashDictionary, srcErrDictionary, srcDir);
-            Console.WriteLine("{0} ms", (DateTime.Now - ts).TotalMilliseconds);
+            //var srcHashDictionary = new Dictionary<string, string>();
+            //var srcErrDictionary = new Dictionary<string, string>();
+            //var dstHashDictionary = new Dictionary<string, string>();
+            //var dstErrDictionary = new Dictionary<string, string>();
 
-            ts = DateTime.Now;
-            Console.Write("Getting Destination Image Hashes... ");
-            hashDirectory(dstHashDictionary, dstErrDictionary, dstDir);
-            Console.WriteLine("{0} ms", (DateTime.Now - ts).TotalMilliseconds);
+            //var ts = DateTime.Now;
+            //Console.Write("Getting Source Image Hashes... ");
+            //hashDirectory(srcHashDictionary, srcErrDictionary, srcDir);
+            //Console.WriteLine("{0} ms", (DateTime.Now - ts).TotalMilliseconds);
 
-            ts = DateTime.Now;
-            Console.Write("Copying Files... ");
-            copyFiles(dstDir, srcHashDictionary, srcErrDictionary, dstHashDictionary, dstErrDictionary);
-            Console.WriteLine("{0} ms", (DateTime.Now - ts).TotalMilliseconds);
+            //ts = DateTime.Now;
+            //Console.Write("Getting Destination Image Hashes... ");
+            //hashDirectory(dstHashDictionary, dstErrDictionary, dstDir);
+            //Console.WriteLine("{0} ms", (DateTime.Now - ts).TotalMilliseconds);
 
-            ts = DateTime.Now;
-            Console.Write("Writing Log... ");
-            writeLog(dstDir, srcErrDictionary, dstErrDictionary);
-            Console.WriteLine("{0} ms", (DateTime.Now - ts).TotalMilliseconds);
+            //ts = DateTime.Now;
+            //Console.Write("Copying Files... ");
+            //copyFiles(dstDir, srcHashDictionary, srcErrDictionary, dstHashDictionary, dstErrDictionary);
+            //Console.WriteLine("{0} ms", (DateTime.Now - ts).TotalMilliseconds);
+
+            //ts = DateTime.Now;
+            //Console.Write("Writing Log... ");
+            //writeLog(dstDir, srcErrDictionary, dstErrDictionary);
+            //Console.WriteLine("{0} ms", (DateTime.Now - ts).TotalMilliseconds);
 
             Console.WriteLine("Done.");
             Console.ReadKey();
         }
 
-        static void hashDirectory(IDictionary<string, string> hashDictionary, IDictionary<string, string> errDictionary, string path)
+        static void hashDirectory(Dictionary<string, string> hashDictionary, Dictionary<string, string> errDictionary, string path)
         {
             if (Directory.Exists(path))
             {
                 var dir = new DirectoryInfo(path);
 
                 var fileInfos = dir.GetFilesByExtensions(".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff");
-                
-                Parallel.ForEach(fileInfos, fil =>
+
+                Parallel.ForEach(fileInfos, new ParallelOptions { MaxDegreeOfParallelism = _threads }, fil =>
                 {
                     try
                     {
@@ -67,38 +80,36 @@ namespace TPS.ImageOrganizer
                 });
 
                 var dirInfos = dir.GetDirectories();
-                Parallel.ForEach(dirInfos, subDir =>
+                for(var i = 0; i < dirInfos.Length; i++)
                 {
-                    hashDirectory(hashDictionary, errDictionary, subDir.FullName);
-                });
+                    hashDirectory(hashDictionary, errDictionary, dirInfos[i].FullName);
+                }
             }
         }
 
         static string getHash(string fileName)
         {
-            var hash = readHashFromExif(fileName);
-            if (!string.IsNullOrWhiteSpace(hash))
-                return hash;
-
-            using(var img = Image.FromFile(fileName))
-            using(var ms = new MemoryStream())
-            using(var sw = new StreamWriter(ms))
+            try
             {
-                var bmp = new Bitmap(img);
-                for(var x = 0; x < bmp.Width; x++)
+                var pixels = default(int[]);
+                using (var bmp = new Bitmap(fileName))
                 {
-                    for(var y = 0; y < bmp.Height; y++)
-                    {
-                        var pixel = bmp.GetPixel(x, y);
-                        sw.Write(BitConverter.GetBytes(pixel.ToArgb()));
-                    }
+                    pixels = new int[bmp.Width * bmp.Height];
+                    for (var x = 0; x < bmp.Width; x++)
+                        for (var y = 0; y < bmp.Height; y++)
+                            pixels[x + y * bmp.Width] = bmp.GetPixel(x, y).ToArgb();
                 }
-                sw.Flush();
-                ms.Seek(0, SeekOrigin.Begin);
-                hash = Convert.ToBase64String(SHA256.Create().ComputeHash(ms));
+
+                var bytes = new byte[pixels.Length * sizeof(int)];
+                Buffer.BlockCopy(pixels, 0, bytes, 0, bytes.Length);
+
+                return Convert.ToBase64String(SHA256.Create().ComputeHash(bytes));
             }
-            writeHashToExif(fileName, hash);
-            return hash;
+            catch(Exception ex)
+            {
+                Console.WriteLine("{0}\t{1}", fileName, ex.Message);
+                return null;
+            }
         }
 
         static string readHashFromExif(string fileName)
@@ -159,6 +170,7 @@ namespace TPS.ImageOrganizer
                         }
                         imgFi.CopyTo(imgPathFile);
                     }
+                    dstHashDictionary.Add(hash, imgPathFile);
                 }
             });
         }
@@ -210,6 +222,125 @@ namespace TPS.ImageOrganizer
                 sw.Flush();
                 sw.Close();
             }
+        }
+
+        static void doHash(string srcDir)
+        {
+            var ts = DateTime.Now;
+            Console.WriteLine("\nFinding images to Hash...");
+            _srcFiles = new List<string>();
+            findFiles(srcDir);
+            Console.WriteLine("Found {0} images in {1} seconds", _srcFiles.Count, (DateTime.Now - ts).TotalMilliseconds / 1000);
+
+            ts = DateTime.Now;
+            Console.WriteLine("\nHashing images using {0} threads... ", _threads);
+            _srcHashes = new Dictionary<string, string>();
+            _srcErrors = new Dictionary<string, string>();
+            Parallel.ForEach(_srcFiles, new ParallelOptions { MaxDegreeOfParallelism = _threads }, fileName => {
+                var hash = getHash(fileName);
+                if (!string.IsNullOrWhiteSpace(hash))
+                {
+                    if (!_srcHashes.ContainsKey(hash))
+                    {
+                        _srcHashes.Add(hash, fileName);
+                        File.AppendAllText(Path.Combine(srcDir, "hashes.csv"), string.Format("\"{0}\",\"{1}\"", hash, fileName));
+                    }
+                    else
+                    {
+                        Console.WriteLine("{0} is a duplicate of {1}", fileName, _srcHashes[hash]);
+                    }
+                }
+            });
+            File.WriteAllText(Path.Combine(srcDir, "hashes.txt"), JsonConvert.SerializeObject(_srcHashes));
+            Console.WriteLine("Hashed {0} images in {1} seconds", _srcFiles.Count, (DateTime.Now - ts).TotalMilliseconds / 1000);
+
+            Console.WriteLine("\nCleaning up...");
+            _srcHashes = null;
+            _srcFiles = null;
+        }
+
+        static List<string> _srcFiles;
+        static IDictionary<string, string> _srcHashes;
+        static IDictionary<string, string> _srcErrors;
+        static IDictionary<string, string> _dstHashes;
+
+        static void findFiles(string path)
+        {
+            var dir = new DirectoryInfo(path);
+            _srcFiles.AddRange(dir.GetFilesByExtensions(".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff").Select(x => x.FullName));
+            foreach(var subDir in dir.GetDirectories())
+                findFiles(subDir.FullName);
+        }
+
+        static Dictionary<string, string> tryReadHashFile(string dir)
+        {
+            var json = default(string);
+            try
+            {
+                json = File.ReadAllText(Path.Combine(dir, "hashes.txt"));
+                return JsonConvert.DeserializeObject<Dictionary<string, string>>(json);
+            }
+            catch(Exception ex)
+            {
+                return new Dictionary<string, string>();
+            }
+        }
+
+        static void doCopy(string srcDir, string dstDir)
+        {
+            var ts = DateTime.Now;
+            Console.WriteLine("Loading Source and Destination Hash Files...");
+            _srcHashes = tryReadHashFile(srcDir);
+            _dstHashes = tryReadHashFile(dstDir);
+            Console.WriteLine("Loaded {0} hashes in {1} seconds.", _srcHashes.Count + _dstHashes.Count(), (DateTime.Now - ts).TotalMilliseconds / 1000);
+
+            ts = DateTime.Now;
+            Console.WriteLine("Copying Files from Source to Destination...");
+            Console.WriteLine("0%");
+            var totalCount = 0;
+            foreach(var hash in _srcHashes.Keys)
+            {
+                if(!_dstHashes.ContainsKey(hash))
+                {
+                    var srcFullName = _srcHashes[hash];
+                    var srcName = Path.GetFileName(srcFullName);
+                    var srcDate = getImageDate(srcFullName);
+                    var dstPath = Path.Combine(dstDir, srcDate.Year.ToString(), srcDate.ToString("yyyy-MM-dd"));
+                    var dstFullName = Path.Combine(dstPath, srcName);
+                    var srcFi = new FileInfo(srcFullName);
+
+                    if (!Directory.Exists(dstPath))
+                    {
+                        Directory.CreateDirectory(dstPath);
+                        srcFi.CopyTo(dstFullName);
+                    }
+                    else if(!File.Exists(dstFullName))
+                    {
+                        srcFi.CopyTo(dstFullName);
+                    }
+                    else
+                    {
+                        var count = 1;
+                        var srcNameNoExt = Path.GetFileNameWithoutExtension(srcName);
+                        var srcExt = Path.GetExtension(srcName);
+                        dstFullName = Path.Combine(dstPath, string.Format("{0} ({1}){2}", srcNameNoExt, count, srcExt));
+                        while(File.Exists(dstFullName))
+                        {
+                            dstFullName = Path.Combine(dstPath, string.Format("{0} ({1}){2}", srcNameNoExt, ++count, srcExt));
+                        }
+                        srcFi.CopyTo(dstFullName);
+                    }
+                    _dstHashes.Add(hash, dstFullName);
+                    Console.Write("\r{0:P}                      ", (double)++totalCount / (double)_srcHashes.Count);
+                    totalCount++;
+                }
+                else
+                {
+                    Console.WriteLine("\n{0} is a duplicate of {1}", _srcHashes[hash], _dstHashes[hash]);
+                }
+                File.WriteAllText(Path.Combine(dstDir, "hashes.txt"), JsonConvert.SerializeObject(_dstHashes));
+            }
+            Console.WriteLine("Copied {0} files in {1} seconds.", _srcHashes.Count, (DateTime.Now - ts).TotalMilliseconds / 1000);
         }
     }
 }
